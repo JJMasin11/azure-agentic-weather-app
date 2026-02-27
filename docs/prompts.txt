@@ -1,0 +1,17 @@
+MCP Server:
+
+Create an MCP server for an Azure Agentic Weather App. The MCP server must:
+- Be implemented as an independent microservice
+- Expose REST endpoints that abstract the Weatherstack API
+- Validate incoming parameters.
+- Handle external API communication.
+- Return normalized JSON responses.
+- Prevent direct exposure of the Weatherstack API key.
+- Have exactly one MCP tool to get the current weather.
+- All file(s) must be in a folder named "mcp-server"
+
+Ask me questions to clarify the product requirements, technical requirements, engineering principles, and hard constraints.
+
+I later gave it context that I was using Azure AI Projects for the LLM and told it to create requirements.txt and .env.example in the root directory.
+I told it to have the unit be in Fahrenheit and the language to be English. Also asked it to create unit tests.
+Found bug where Weatherstack free tier doesn't allow HTTPS requests and fixed.
