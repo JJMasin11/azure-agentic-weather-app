@@ -46,28 +46,37 @@ MOCK_WEATHERSTACK_SUCCESS = {
     },
 }
 
-MOCK_WEATHERSTACK_ERROR = {
+# Error code 615 = invalid / unrecognised location → server must return 404
+MOCK_WEATHERSTACK_LOCATION_ERROR = {
     "success": False,
     "error": {
         "code": 615,
         "type": "request_failed",
-        "info": "Your API request failed. Please try again or contact support.",
+        "info": "Please specify a valid location identifier.",
+    },
+}
+
+# Error code 104 = usage limit reached → server must return 400
+MOCK_WEATHERSTACK_GENERIC_ERROR = {
+    "success": False,
+    "error": {
+        "code": 104,
+        "type": "usage_limit_reached",
+        "info": "Your monthly API request volume has been reached.",
     },
 }
 
 
-def test_missing_location_returns_422():
+def test_missing_location_returns_400():
     response = client.get("/weather")
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert any("location" in str(err).lower() for err in detail)
+    assert response.status_code == 400
+    assert "error" in response.json()
 
 
-def test_invalid_units_returns_422():
+def test_invalid_units_returns_400():
     response = client.get("/weather", params={"location": "Austin", "units": "kelvin"})
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert any("units" in str(err).lower() for err in detail)
+    assert response.status_code == 400
+    assert "error" in response.json()
 
 
 @respx.mock
@@ -86,30 +95,27 @@ def test_successful_response_normalized_shape():
     assert response.status_code == 200
     data = response.json()
 
-    assert data["success"] is True
-    assert data["units"] == "f"
+    # Flat top-level structure required by spec
+    assert data["location"] == "Austin"
+    assert data["temperature"] == 72
+    assert data["feels_like"] == 70           # feelslike → feels_like
+    assert data["wind_direction"] == "S"      # wind_dir → wind_direction
+    assert data["cloud_cover"] == 5           # cloudcover → cloud_cover
+    assert data["weather_description"] == "Sunny"
+    assert data["humidity"] == 45
+    assert data["uv_index"] == 6
+    assert data["visibility"] == 10
 
-    loc = data["location"]
-    assert loc["name"] == "Austin"
-    assert loc["country"] == "United States of America"
-    assert loc["lat"] == 30.283
-    assert loc["lon"] == -97.742
-
-    current = data["current"]
-    assert current["temperature"] == 72
-    assert current["feels_like"] == 70        # feelslike → feels_like
-    assert current["wind_direction"] == "S"   # wind_dir → wind_direction
-    assert current["cloud_cover"] == 5        # cloudcover → cloud_cover
-    assert current["description"] == "Sunny"
-    assert current["humidity"] == 45
-    assert current["uv_index"] == 6
-    assert current["visibility"] == 10
+    # Old nested keys must not be present
+    assert "success" not in data
+    assert "current" not in data
+    assert "units" not in data
 
 
 @respx.mock
-def test_weatherstack_api_error_normalized():
+def test_location_not_found_returns_404():
     respx.get(server.WEATHERSTACK_BASE_URL).mock(
-        return_value=httpx.Response(200, json=MOCK_WEATHERSTACK_ERROR)
+        return_value=httpx.Response(200, json=MOCK_WEATHERSTACK_LOCATION_ERROR)
     )
 
     original_key = server.WEATHERSTACK_API_KEY
@@ -119,16 +125,32 @@ def test_weatherstack_api_error_normalized():
     finally:
         server.WEATHERSTACK_API_KEY = original_key
 
+    assert response.status_code == 404
+    assert response.json() == {"error": "Location not found."}
+
+
+@respx.mock
+def test_generic_api_error_returns_400():
+    respx.get(server.WEATHERSTACK_BASE_URL).mock(
+        return_value=httpx.Response(200, json=MOCK_WEATHERSTACK_GENERIC_ERROR)
+    )
+
+    original_key = server.WEATHERSTACK_API_KEY
+    server.WEATHERSTACK_API_KEY = "test_key"
+    try:
+        response = client.get("/weather", params={"location": "Austin"})
+    finally:
+        server.WEATHERSTACK_API_KEY = original_key
+
     assert response.status_code == 400
-    detail = response.json()["detail"]
-    assert detail["code"] == 615
-    assert detail["success"] is False
+    assert "error" in response.json()
 
 
 def test_missing_api_key_returns_503(monkeypatch):
     monkeypatch.setattr(server, "WEATHERSTACK_API_KEY", None)
     response = client.get("/weather", params={"location": "Austin"})
     assert response.status_code == 503
+    assert "error" in response.json()
 
 
 def test_health_endpoint_returns_200():
@@ -160,3 +182,20 @@ def test_default_units_is_fahrenheit():
     assert captured_request is not None
     query_params = dict(httpx.URL(str(captured_request.url)).params)
     assert query_params.get("units") == "f"
+
+
+@respx.mock
+def test_timeout_returns_502():
+    respx.get(server.WEATHERSTACK_BASE_URL).mock(
+        side_effect=httpx.TimeoutException("timed out")
+    )
+
+    original_key = server.WEATHERSTACK_API_KEY
+    server.WEATHERSTACK_API_KEY = "test_key"
+    try:
+        response = client.get("/weather", params={"location": "Austin"})
+    finally:
+        server.WEATHERSTACK_API_KEY = original_key
+
+    assert response.status_code == 502
+    assert "error" in response.json()

@@ -6,14 +6,16 @@
 
 #### 1.1 Objective
 
-The objective of this project is to design and implement a full-stack, agent-driven web application that integrates:
+The objective of this project is to design and implement a full-stack, agent-driven web application that retrieves real-time weather data using a structured LLM tool-calling architecture.
+
+The system integrates:
 
 - The Weatherstack REST API.
-- A microservice wrapper (MCP Server).
-- An LLM agent with tool/function-calling capability.
-- A frontend interface for user interaction.
+- A Microservice Communication Proxy (MCP Server)
+- An LLM agent backend with structured function-calling capability
+- A frontend web interface for user interaction.
 
-The system must demonstrate clean architectural separation, proper agent orchestration, and structured tool invocation.
+The solution must demonstrate clean architectural separation, deterministic tool invocation, normalized data handling, and production-aware design principles.
 
 ---
 
@@ -21,40 +23,155 @@ The system must demonstrate clean architectural separation, proper agent orchest
 
 #### 2.1 Public API Integration
 
-The system must:
+The system must integrate with the Weatherstack `/current` endpoint to retrieve real-time weather data.
 
-- Integrate with the Weatherstack REST API.
-- Securely store and manage API keys via environment variables.
-- Retrieve structured JSON data from the API.
-- Handle API errors gracefully.
+The integration must:
+
+- Store API keys securely using environment variables.
+- Send properly formatted HTTP requests.
+- Parse structured JSON responses.
+- Handle the following external API errors:
+  - 4xx client errors.
+  - 5xx server errors.
+  - Network timeouts.
+  - Invalid location responses.
+
+The system must not expose the Weatherstack API's key to any external service.
 
 ---
 
 #### 2.2 MCP Server (Microservice Wrapper)
 
-The MCP Server must:
+The MCP Server must be implemented as an independent microservice responsible for abstracting and normalizing Weatherstack API communication.
 
-- Be implemented as an independent microservice.
-- Expose REST endpoints that abstract the Weatherstack API.
-- Validate incoming parameters.
-- Handle external API communication.
-- Return normalized JSON responses.
-- Prevent direct exposure of the Weatherstack API key.
+#### Endpoint Contract
 
-The MCP server must be independently runnable.
+The MCP server must expose:
+
+`GET /weather?location=<city>`
+
+#### Parameter Validation
+
+- `location` must be a non-empty string.
+- Return HTTP 400 for missing or invalid parameters.
+
+#### Responsibilities
+
+The MCP server must:
+
+- Communicate securely with the Weatherstack `/current` endpoint.
+- Normalize external API responses into a consistent internal schema.
+- Prevent exposure of API credentials.
+- Be independently runnable.
+- Log incoming requests and external API failures.
+
+#### Normalized JSON Response
+
+The MCP server must return responses in the following structure:
+
+```
+{
+    "location": "Austin",
+    "temperature": 72,
+    "feels_like": 75,
+    "humidity": 65,
+    "wind_speed": 10,
+    "wind_direction": "NW",
+    "weather_description": "Partly cloudy",
+    "uv_index": 5,
+    "visibility": 10,
+    "cloud_cover": 40
+}
+```
+
+#### Error Handling
+
+The MCP server must:
+
+- Return 400 for invalid request parameters.
+- Return 404 if the requested location is not found.
+- Return 502 if the external API fails or times out.
+- Return structured JSON error responses:
+
+```
+{
+    "error": "Location not found"
+}
+```
+
+#### Service Boundary
+
+The MCP server must be the only service permitted to communicate with the Weatherstack API.
 
 ---
 
 #### 2.3 LLM Agent Backend
 
-The agent backend must:
+The LLM Agent Backend must orchestrate user queries and structured tool invocation.
 
-- Utilize an LLM capable of tool/function calling.
-- Define at least one tool schema corresponding to MCP functionality.
-- Allow the LLM to decide when to invoke the tool.
-- Execute tool calls via HTTP requests to the MCP server.
-- Format final responses for user display.
-- Handle invalid tool calls and execution errors.
+#### Model Requirements
+
+The agent must:
+
+- Utilize an LLM that supports structured function/tool calling.
+- Be configured with low temperature (≤ 0.3) to promote deterministic behavior.
+- Rely on structured tool-call responses rather than parsing free-form text.
+
+#### Tool Definition
+
+The system must define at least one tool:
+
+**Tool Name**: `get_current_weather`
+
+**Parameters**:
+
+- `location` (string, required)
+
+The tool must correspond to the MCP server endpoint.
+
+#### Agent Behavior
+
+The agent must:
+
+- Analyze user queries.
+- Determine when to invoke the weather tool.
+- Generate structured tool-call JSON.
+- Execute HTTP requests to the MCP server.
+- Parse tool responses.
+- Format user-facing responses.
+
+#### Query Handling Rules
+
+**1. General Weather Queries**
+
+Example: "What's the weather in Austin?"
+
+- Must call the weather tool.
+- Must return a concise summary including temperature and weather description.
+
+**2. Specific Attribute Queries**
+
+Example: "What's the wind speed in Austin?"
+
+- Must call the weather tool.
+- Must extract and return only the requested attribute when possible.
+
+**3. Out-of-Scope Queries**
+
+If a query is unrelated to weather:
+
+- The agent must respond that it is specialized for weather-related queries.
+
+#### Error Handling
+
+The agent must handle:
+
+- Invalid tool-call arguments.
+- MCP server errors.
+- Unexpected execution failures.
+- Malformed LLM tool responses
+
+User-facing error responses must be clear and concise.
 
 ---
 
@@ -63,11 +180,14 @@ The agent backend must:
 The frontend must:
 
 - Provide a user input field.
-- Submit user queries to the agent backend.
-- Display responses returned by the agent.
-- Handle loading and error states.
+- Submit user queries to the LLM agent backend.
+- Display structured responses.
+- Display loading states.
+- Display user-friendly error messages.
 
 The frontend does not require advanced styling or authentication.
+
+The frontend must not have access to any API keys.
 
 ---
 
@@ -81,6 +201,7 @@ The system must demonstrate:
 - Microservice-based structure.
 - Logical code organization.
 - Environment variable configuration.
+- Strict service boundaries.
 
 ---
 
@@ -90,25 +211,36 @@ The codebase must:
 
 - Use descriptive function and variable names.
 - Include inline comments for complex logic.
-- Provide a well-structured repository layout.
-- Include setup instructions in the README.
+- Follow consistent naming conventions.
+- Include setup and configuration instructions in the README.
+- Provide an `.env.example` file.
 
 ---
 
-#### 3.3 Scalability (Conceptual)
+#### 3.3 Observability
 
-The solution must allow for future:
+The backend service must log:
 
-- Containerization via Docker.
-- Independent scaling of services.
+- Incoming user queries.
+- Tool invocation attempts.
+- MCP server responses.
+- External API errors.
+- Unexpected execution failures.
+
+#### 3.4 Scalability (Conceptual)
+
+The architecture must allow for future:
+
+- Independent scaling of frontend, agent backend, and MCP server.
 - Additional tool/plugin integration.
-- Cloud deployment.
+- Containerization via Docker.
+- Cloud deployment using Azure Container Apps or similar services.
 
 ---
 
 ### 4. System Architecture
 
-#### 4.1 High-Level Architecture
+#### 4.1 High-Level Flow
 
 ```
 Frontend (Web App)
@@ -124,33 +256,33 @@ Public REST API
 
 #### 4.2 Component Responsibilities
 
-| **Component**    | **Responsibility**                       |
-| ---------------- | ---------------------------------------- |
-| Frontend         | Collect user input and display results   |
-| LLM Agent        | Orchestrate conversation and tool calls  |
-| MCP Server       | Abstract external API and normalize data |
-| Weatherstack API | Provide weather data                     |
+| **Component**    | **Responsibility**                           |
+| ---------------- | -------------------------------------------- |
+| Frontend         | Collect user input and display results       |
+| LLM Agent        | Interpret queries and orchestrate tool calls |
+| MCP Server       | Abstract external API and normalize data     |
+| Weatherstack API | Provide raw weather data                     |
 
 ---
 
-### 5. Tool Definition Requirements
+### 5. Tool Invocation Requirements
 
-The system must define:
+The system must:
 
-- A structured tool schema.
-- Clear input parameter definitions.
-- Human-readable tool description.
-- JSON-based output.
-
-The agent must invoke tools deterministically via function calling rather than relying on free-from text prompting
+- Use structured function calling.
+- Avoid free-form text-based tool extraction.
+- Ensure deterministic tool invocation behavior.
+- Maintain a clear schema contract between agent and MCP server.
 
 ---
 
 ### 6. Security Requirements
 
 - API keys must not be hard-coded.
-- Environment variables must be used.
-- The MCP server must act as the only service communicating with the Weatherstack API.
+- Environment variables must be use for configuration.
+- The MCP server must be the only service communicating with the Weatherstack API.
+- The frontend must never have access to backend credentials.
+- Secrets must not be committed to source control.
 
 ---
 
@@ -168,6 +300,8 @@ requirements.txt
 .env.example
 ```
 
+Each service must be independently runnable.
+
 ---
 
 ### 8. Deployment Considerations (Conceptual)
@@ -175,10 +309,9 @@ requirements.txt
 The system should be deployable using:
 
 - Docker containers (one per service).
-- Cloud container hosting (e.g., Azure Container Apps).
+- Azure Container Apps or equivalent container hosting.
 - Environment-based configuration.
-
-Each service should be independently deployable.
+- Independent service deployment.
 
 ---
 
@@ -187,6 +320,6 @@ Each service should be independently deployable.
 The repository must include:
 
 - Setup instructions.
-- Environment variable configuration.
+- Environment variable configuration steps.
 - API key acquisition instructions.
 - Instructions for running each service locally.

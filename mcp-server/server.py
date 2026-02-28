@@ -7,7 +7,9 @@ from pathlib import Path
 import httpx
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # Load .env from project root (one level above mcp-server/)
@@ -15,6 +17,9 @@ load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 WEATHERSTACK_BASE_URL = "http://api.weatherstack.com/current"
 WEATHERSTACK_API_KEY = os.getenv("WEATHERSTACK_API_KEY")
+
+# Weatherstack error codes that indicate an invalid or unrecognised location
+_LOCATION_NOT_FOUND_CODES = {601, 615}
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,49 +43,54 @@ app = FastAPI(
 )
 
 
+# ── Custom exception handlers ────────────────────────────────────────────────
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Return 400 (not FastAPI's default 422) for missing / invalid parameters."""
+    return JSONResponse(status_code=400, content={"error": "Invalid request parameters."})
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Normalise all HTTP errors to {"error": "..."} instead of {"detail": ...}."""
+    if isinstance(exc.detail, dict) and "error" in exc.detail:
+        content = exc.detail
+    elif isinstance(exc.detail, str):
+        content = {"error": exc.detail}
+    else:
+        content = {"error": str(exc.detail)}
+    return JSONResponse(status_code=exc.status_code, content=content)
+
+
+# ── Pydantic models ──────────────────────────────────────────────────────────
+
 class UnitsEnum(str, Enum):
     fahrenheit = "f"
     metric = "m"
     scientific = "s"
 
 
-class LocationModel(BaseModel):
-    name: str
-    country: str
-    region: str
-    lat: float
-    lon: float
-
-
-class CurrentWeatherModel(BaseModel):
+class WeatherResponse(BaseModel):
+    """Flat normalised weather response matching the spec schema."""
+    location: str
     temperature: int
     feels_like: int
     humidity: int
     wind_speed: int
     wind_direction: str
-    description: str
+    weather_description: str
     uv_index: int
     visibility: int
     cloud_cover: int
-
-
-class WeatherSuccessResponse(BaseModel):
-    success: bool = True
-    location: LocationModel
-    current: CurrentWeatherModel
-    units: str
-
-
-class WeatherErrorResponse(BaseModel):
-    success: bool = False
-    error: str
-    code: int
 
 
 class HealthResponse(BaseModel):
     status: str
     api_key_configured: bool
 
+
+# ── Endpoints ────────────────────────────────────────────────────────────────
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
@@ -90,15 +100,17 @@ async def health() -> HealthResponse:
     )
 
 
-@app.get("/weather", response_model=WeatherSuccessResponse)
+@app.get("/weather", response_model=WeatherResponse)
 async def get_weather(
     location: str = Query(..., min_length=1),
     units: UnitsEnum = Query(UnitsEnum.fahrenheit),
-) -> WeatherSuccessResponse:
+) -> WeatherResponse:
+    logger.info("Incoming request: location=%r units=%s", location, units.value)
+
     if not WEATHERSTACK_API_KEY:
         raise HTTPException(
             status_code=503,
-            detail="Weather service is unavailable: API key not configured.",
+            detail={"error": "Weather service is unavailable: API key not configured."},
         )
 
     params = {
@@ -114,36 +126,45 @@ async def get_weather(
             )
             response.raise_for_status()
     except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=504,
-            detail="Request to weather service timed out.",
-        )
-    except httpx.HTTPStatusError as exc:
-        try:
-            body = exc.response.json()
-        except Exception:
-            body = exc.response.text
-        logger.error("Weatherstack HTTP error %s: %s", exc.response.status_code, body)
+        logger.error("Request to Weatherstack timed out for location: %r", location)
         raise HTTPException(
             status_code=502,
-            detail={
-                "upstream_status": exc.response.status_code,
-                "upstream_body": body,
-            },
+            detail={"error": "Weather service timed out."},
+        )
+    except httpx.HTTPStatusError as exc:
+        logger.error(
+            "Weatherstack HTTP error %s for location %r",
+            exc.response.status_code,
+            location,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "External weather service returned an error."},
         )
 
     data = response.json()
 
-    # Weatherstack always returns HTTP 200; errors are signaled in the body
+    # Weatherstack always returns HTTP 200; errors are signalled in the body
     if data.get("success") is False:
         error_info = data.get("error", {})
+        code = error_info.get("code", 0)
+        message = error_info.get("info", "Unknown error from weather service.")
+
+        if code in _LOCATION_NOT_FOUND_CODES:
+            logger.warning(
+                "Location not found: %r (Weatherstack code %s)", location, code
+            )
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "Location not found."},
+            )
+
+        logger.error(
+            "Weatherstack error code %s for location %r: %s", code, location, message
+        )
         raise HTTPException(
             status_code=400,
-            detail={
-                "success": False,
-                "error": error_info.get("info", "Unknown error from weather service."),
-                "code": error_info.get("code", 0),
-            },
+            detail={"error": message},
         )
 
     loc = data.get("location", {})
@@ -152,30 +173,17 @@ async def get_weather(
     descriptions = current.get("weather_descriptions", [])
     description = descriptions[0] if descriptions else ""
 
-    location_model = LocationModel(
-        name=loc.get("name", ""),
-        country=loc.get("country", ""),
-        region=loc.get("region", ""),
-        lat=float(loc.get("lat", 0)),
-        lon=float(loc.get("lon", 0)),
-    )
-
-    current_model = CurrentWeatherModel(
+    return WeatherResponse(
+        location=loc.get("name", ""),
         temperature=current.get("temperature", 0),
         feels_like=current.get("feelslike", 0),
         humidity=current.get("humidity", 0),
         wind_speed=current.get("wind_speed", 0),
         wind_direction=current.get("wind_dir", ""),
-        description=description,
+        weather_description=description,
         uv_index=current.get("uv_index", 0),
         visibility=current.get("visibility", 0),
         cloud_cover=current.get("cloudcover", 0),
-    )
-
-    return WeatherSuccessResponse(
-        location=location_model,
-        current=current_model,
-        units=units.value,
     )
 
 
