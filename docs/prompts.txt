@@ -15,3 +15,33 @@ Ask me questions to clarify the product requirements, technical requirements, en
 I later gave it context that I was using Azure AI Projects for the LLM and told it to create requirements.txt and .env.example in the root directory.
 I told it to have the unit be in Fahrenheit and the language to be English. Also asked it to create unit tests.
 Found bug where Weatherstack free tier doesn't allow HTTPS requests and fixed.
+
+LLM Agent Backend:
+Create an LLM agent backend for an Azure Agentic Weather app. The LLM agent backend must orchestrate user queries and structured tool invocation.
+The agent must:
+- Utilize an LLM that supports structured function/tool calling
+- Be configured with a low temperature (<= 0.3) to promote deterministic behavior.
+- Rely on structured tool-call responses rather than parsing free-form text.
+- Be built using the Azure AI Projects library with the credentials in .env
+- Define a tool named "get_current_weather" which requires a location string. This tool must correspond to the MCP server endpoint.
+- Analyze user queries
+- Execute HTTP requests to the MCP server
+- Parse tool responses
+- Format user-facing responses
+
+The agent must handle:
+- Invalid tool-call arguments
+- MCP server errors
+- Unexpected execution failures
+- Malformed LLM tool responses
+- User-facing errors must be clear and concise
+
+Ask me questions to clarify product requirements, technical requirements, engineering principles, and hard constraints.
+
+I later clarified that I wanted the LLM to be stateful.
+
+Main Function:
+
+Create a main function that starts the MCP and Agent server and runs the agent with a CLI interface. Allow for the frontend to be implemented later.
+
+Ask me questions to clarify product requirements, technical requirements, engineering principles, and hard constraints.

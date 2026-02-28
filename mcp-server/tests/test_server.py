@@ -1,7 +1,7 @@
 import sys
 import os
 
-# Ensure the mcp-server directory is on the path so `server` can be imported
+# Ensure the mcp-server directory is on the path so `mcp_server` can be imported
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import respx
@@ -9,7 +9,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-import server
+import mcp_server as server
 
 client = TestClient(server.app)
 

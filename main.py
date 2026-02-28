@@ -1,0 +1,202 @@
+"""
+main.py — Unified launcher + interactive REPL for the Azure Agentic Weather App.
+
+Usage:
+    python main.py
+
+Starts the MCP server and Agent backend as subprocesses, waits for both to be
+healthy, then opens an interactive CLI chat loop. Press Ctrl-C or type 'quit'
+to exit; both servers are terminated cleanly on exit.
+"""
+
+import os
+import sys
+import subprocess
+import time
+from pathlib import Path
+
+import httpx
+from dotenv import load_dotenv
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+
+ROOT = Path(__file__).parent
+load_dotenv(dotenv_path=ROOT / ".env")
+
+MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
+AGENT_PORT = int(os.getenv("AGENT_PORT", "8001"))
+
+MCP_HEALTH_URL = f"http://localhost:{MCP_PORT}/health"
+AGENT_HEALTH_URL = f"http://localhost:{AGENT_PORT}/health"
+AGENT_CHAT_URL = f"http://localhost:{AGENT_PORT}/chat"
+
+
+# ── Health polling ─────────────────────────────────────────────────────────────
+
+def _wait_for_health(url: str, timeout: int, label: str) -> bool:
+    """Poll GET url until status 200 or timeout (seconds). Returns True on success."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if httpx.get(url, timeout=1.0).status_code == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+# ── Graceful shutdown ──────────────────────────────────────────────────────────
+
+def _shutdown(procs: list, log_files: list) -> None:
+    """SIGTERM all processes, wait up to 5 s each, then SIGKILL stragglers."""
+    for p in procs:
+        p.terminate()
+    for p in procs:
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    for f in log_files:
+        f.close()
+
+
+# ── REPL ───────────────────────────────────────────────────────────────────────
+
+def _run_repl() -> None:
+    """Interactive chat loop. Maintains conversation history in memory."""
+    print(
+        f"\nWeather Agent — type your question, or 'quit' to exit.\n"
+        f"Logs: mcp_server.log | agent_server.log\n"
+    )
+
+    history: list[dict] = []
+
+    while True:
+        try:
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if not user_input:
+            continue
+
+        if user_input.lower() in {"quit", "exit", "q"}:
+            break
+
+        payload = {"message": user_input, "history": history}
+
+        try:
+            response = httpx.post(AGENT_CHAT_URL, json=payload, timeout=30.0)
+            response.raise_for_status()
+            data = response.json()
+        except httpx.HTTPStatusError as exc:
+            print(f"Error: HTTP {exc.response.status_code} from agent.")
+            continue
+        except Exception as exc:
+            print(f"Error: {exc}")
+            continue
+
+        if "error" in data:
+            print(f"Error: {data['error']}")
+            continue
+
+        reply = data.get("reply", "")
+        tool_used = data.get("tool_used", False)
+        suffix = " [tool used]" if tool_used else ""
+        print(f"Agent{suffix}: {reply}\n")
+
+        # Append to history only on success
+        history.append({"role": "user", "content": user_input})
+        history.append({"role": "assistant", "content": reply})
+
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    log_files = []
+    procs = []
+
+    try:
+        # Open log files
+        mcp_log = open(ROOT / "mcp_server.log", "w")
+        agent_log = open(ROOT / "agent_server.log", "w")
+        log_files = [mcp_log, agent_log]
+
+        # ── Banner ─────────────────────────────────────────────────────────────
+        print(
+            "╔══════════════════════════════════════╗\n"
+            "║   Azure Agentic Weather App          ║\n"
+            f"║   MCP  → http://localhost:{MCP_PORT}       ║\n"
+            f"║   Agent → http://localhost:{AGENT_PORT}      ║\n"
+            "║   Logs  → mcp_server.log             ║\n"
+            "║           agent_server.log           ║\n"
+            "╚══════════════════════════════════════╝"
+        )
+
+        # ── Start MCP server ───────────────────────────────────────────────────
+        print("Starting MCP server...", end="  ", flush=True)
+        mcp_proc = subprocess.Popen(
+            [sys.executable, "mcp_server.py"],
+            cwd=ROOT / "mcp-server",
+            stdout=mcp_log,
+            stderr=subprocess.STDOUT,
+        )
+        procs.append(mcp_proc)
+
+        if not _wait_for_health(MCP_HEALTH_URL, timeout=30, label="MCP"):
+            print("FAILED")
+            print(
+                f"Error: MCP server did not become healthy within 30 s.\n"
+                f"Check mcp_server.log for details.",
+                file=sys.stderr,
+            )
+            _shutdown(procs, log_files)
+            sys.exit(1)
+        print("OK")
+
+        # ── Start Agent server ─────────────────────────────────────────────────
+        print("Starting Agent server...", end=" ", flush=True)
+        agent_proc = subprocess.Popen(
+            [sys.executable, "agent_server.py"],
+            cwd=ROOT / "agent-backend",
+            stdout=agent_log,
+            stderr=subprocess.STDOUT,
+        )
+        procs.append(agent_proc)
+
+        if not _wait_for_health(AGENT_HEALTH_URL, timeout=15, label="Agent"):
+            print("FAILED")
+            print(
+                f"Error: Agent server did not become healthy within 15 s.\n"
+                f"Check agent_server.log for details.",
+                file=sys.stderr,
+            )
+            _shutdown(procs, log_files)
+            sys.exit(1)
+        print("OK\n")
+
+        # ── Interactive REPL ───────────────────────────────────────────────────
+        _run_repl()
+
+    finally:
+        print("Shutting down...")
+        _shutdown(procs, log_files)
+
+
+if __name__ == "__main__":
+    main()
+
+
+# ── Frontend integration (not yet implemented) ────────────────────────────────
+# The agent backend exposes a REST API at http://localhost:{AGENT_PORT}:
+#
+#   POST /chat   {"message": str, "history": [{"role": str, "content": str}]}
+#                → {"reply": str, "tool_used": bool}
+#   GET  /health → {"status": "ok", "model": str, "mcp_url": str}
+#
+# A web frontend can be added as a third subprocess here (e.g., a React/Next.js
+# dev server or a Python Streamlit app) following the same Popen + health-poll
+# pattern used for the MCP and Agent servers above.
+# ─────────────────────────────────────────────────────────────────────────────

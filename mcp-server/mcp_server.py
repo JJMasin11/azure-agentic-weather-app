@@ -189,7 +189,7 @@ async def get_weather(
 
 if __name__ == "__main__":
     uvicorn.run(
-        "server:app",
+        "mcp_server:app",
         host="0.0.0.0",
         port=int(os.getenv("MCP_PORT", "8000")),
         reload=False,
