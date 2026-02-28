@@ -1,12 +1,12 @@
 """
-main.py — Unified launcher + interactive REPL for the Azure Agentic Weather App.
+main.py — Unified launcher for the Azure Agentic Weather App.
 
 Usage:
     python main.py
 
-Starts the MCP server and Agent backend as subprocesses, waits for both to be
-healthy, then opens an interactive CLI chat loop. Press Ctrl-C or type 'quit'
-to exit; both servers are terminated cleanly on exit.
+Starts the MCP server, Agent backend, and Streamlit frontend as subprocesses,
+waits for all three to be healthy, then prints the URL. Press Ctrl-C to exit;
+all servers are terminated cleanly on exit.
 """
 
 import os
@@ -25,10 +25,12 @@ load_dotenv(dotenv_path=ROOT / ".env")
 
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 AGENT_PORT = int(os.getenv("AGENT_PORT", "8001"))
+FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", "8501"))
 
 MCP_HEALTH_URL = f"http://localhost:{MCP_PORT}/health"
 AGENT_HEALTH_URL = f"http://localhost:{AGENT_PORT}/health"
 AGENT_CHAT_URL = f"http://localhost:{AGENT_PORT}/chat"
+FRONTEND_HEALTH_URL = f"http://localhost:{FRONTEND_PORT}/_stcore/health"
 
 
 # ── Health polling ─────────────────────────────────────────────────────────────
@@ -61,55 +63,55 @@ def _shutdown(procs: list, log_files: list) -> None:
         f.close()
 
 
-# ── REPL ───────────────────────────────────────────────────────────────────────
-
-def _run_repl() -> None:
-    """Interactive chat loop. Maintains conversation history in memory."""
-    print(
-        f"\nWeather Agent — type your question, or 'quit' to exit.\n"
-        f"Logs: mcp_server.log | agent_server.log\n"
-    )
-
-    history: list[dict] = []
-
-    while True:
-        try:
-            user_input = input("You: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-
-        if not user_input:
-            continue
-
-        if user_input.lower() in {"quit", "exit", "q"}:
-            break
-
-        payload = {"message": user_input, "history": history}
-
-        try:
-            response = httpx.post(AGENT_CHAT_URL, json=payload, timeout=30.0)
-            response.raise_for_status()
-            data = response.json()
-        except httpx.HTTPStatusError as exc:
-            print(f"Error: HTTP {exc.response.status_code} from agent.")
-            continue
-        except Exception as exc:
-            print(f"Error: {exc}")
-            continue
-
-        if "error" in data:
-            print(f"Error: {data['error']}")
-            continue
-
-        reply = data.get("reply", "")
-        tool_used = data.get("tool_used", False)
-        suffix = " [tool used]" if tool_used else ""
-        print(f"Agent{suffix}: {reply}\n")
-
-        # Append to history only on success
-        history.append({"role": "user", "content": user_input})
-        history.append({"role": "assistant", "content": reply})
+# ── REPL (kept for CLI testing — uncomment and comment out Streamlit launch) ───
+#
+# def _run_repl() -> None:
+#     """Interactive chat loop. Maintains conversation history in memory."""
+#     print(
+#         f"\nWeather Agent — type your question, or 'quit' to exit.\n"
+#         f"Logs: mcp_server.log | agent_server.log\n"
+#     )
+#
+#     history: list[dict] = []
+#
+#     while True:
+#         try:
+#             user_input = input("You: ").strip()
+#         except (EOFError, KeyboardInterrupt):
+#             print()
+#             break
+#
+#         if not user_input:
+#             continue
+#
+#         if user_input.lower() in {"quit", "exit", "q"}:
+#             break
+#
+#         payload = {"message": user_input, "history": history}
+#
+#         try:
+#             response = httpx.post(AGENT_CHAT_URL, json=payload, timeout=30.0)
+#             response.raise_for_status()
+#             data = response.json()
+#         except httpx.HTTPStatusError as exc:
+#             print(f"Error: HTTP {exc.response.status_code} from agent.")
+#             continue
+#         except Exception as exc:
+#             print(f"Error: {exc}")
+#             continue
+#
+#         if "error" in data:
+#             print(f"Error: {data['error']}")
+#             continue
+#
+#         reply = data.get("reply", "")
+#         tool_used = data.get("tool_used", False)
+#         suffix = " [tool used]" if tool_used else ""
+#         print(f"Agent{suffix}: {reply}\n")
+#
+#         # Append to history only on success
+#         history.append({"role": "user", "content": user_input})
+#         history.append({"role": "assistant", "content": reply})
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
@@ -128,10 +130,12 @@ def main() -> None:
         print(
             "╔══════════════════════════════════════╗\n"
             "║   Azure Agentic Weather App          ║\n"
-            f"║   MCP  → http://localhost:{MCP_PORT}       ║\n"
-            f"║   Agent → http://localhost:{AGENT_PORT}      ║\n"
+            f"║   MCP      → http://localhost:{MCP_PORT}   ║\n"
+            f"║   Agent    → http://localhost:{AGENT_PORT}   ║\n"
+            f"║   Frontend → http://localhost:{FRONTEND_PORT} ║\n"
             "║   Logs  → mcp_server.log             ║\n"
             "║           agent_server.log           ║\n"
+            "║           frontend.log               ║\n"
             "╚══════════════════════════════════════╝"
         )
 
@@ -175,10 +179,47 @@ def main() -> None:
             )
             _shutdown(procs, log_files)
             sys.exit(1)
+        print("OK")
+
+        # ── Start Streamlit frontend ───────────────────────────────────────────
+        print("Starting Streamlit frontend...", end=" ", flush=True)
+        frontend_log = open(ROOT / "frontend.log", "w")
+        log_files.append(frontend_log)
+        frontend_proc = subprocess.Popen(
+            [sys.executable, "-m", "streamlit", "run", "frontend/app.py",
+             "--server.port", str(FRONTEND_PORT),
+             "--server.headless", "true"],
+            cwd=ROOT,
+            stdout=frontend_log,
+            stderr=subprocess.STDOUT,
+        )
+        procs.append(frontend_proc)
+
+        if not _wait_for_health(FRONTEND_HEALTH_URL, timeout=30, label="Frontend"):
+            print("FAILED")
+            print(
+                f"Error: Streamlit frontend did not become healthy within 30 s.\n"
+                f"Check frontend.log for details.",
+                file=sys.stderr,
+            )
+            _shutdown(procs, log_files)
+            sys.exit(1)
         print("OK\n")
 
-        # ── Interactive REPL ───────────────────────────────────────────────────
-        _run_repl()
+        print(f"Open your browser at: http://localhost:{FRONTEND_PORT}")
+        print("Press Ctrl-C to stop all services.\n")
+
+        # Keep the launcher alive until interrupted
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print()
+
+        # ── Interactive REPL (commented out — kept for CLI testing) ───────────
+        # Uncomment _run_repl() and comment out the Streamlit launch block above
+        # to use the CLI chat loop instead of the browser frontend.
+        # _run_repl()
 
     finally:
         print("Shutting down...")
@@ -187,16 +228,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-# ── Frontend integration (not yet implemented) ────────────────────────────────
-# The agent backend exposes a REST API at http://localhost:{AGENT_PORT}:
-#
-#   POST /chat   {"message": str, "history": [{"role": str, "content": str}]}
-#                → {"reply": str, "tool_used": bool}
-#   GET  /health → {"status": "ok", "model": str, "mcp_url": str}
-#
-# A web frontend can be added as a third subprocess here (e.g., a React/Next.js
-# dev server or a Python Streamlit app) following the same Popen + health-poll
-# pattern used for the MCP and Agent servers above.
-# ─────────────────────────────────────────────────────────────────────────────

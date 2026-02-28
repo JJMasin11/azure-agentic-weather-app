@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -7,7 +8,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from agent import (
     AgentError,
@@ -15,6 +16,7 @@ from agent import (
     MODEL_DEPLOYMENT_NAME,
     _make_chat_client,
     run_agent,
+    run_agent_stream,
 )
 from openai import AsyncAzureOpenAI
 from models import AgentHealthResponse, ChatRequest, ChatResponse
@@ -100,6 +102,29 @@ async def chat(request: ChatRequest) -> ChatResponse:
             status_code=500,
             content={"error": "An unexpected error occurred."},
         )
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    if _chat_client is None:
+        async def _err():
+            yield f'data: {json.dumps({"type": "error", "message": "Chat service not available."})}\n\n'
+        return StreamingResponse(_err(), media_type="text/event-stream")
+
+    async def _generate():
+        try:
+            async for event in run_agent_stream(
+                message=request.message,
+                history=request.history,
+                chat_client=_chat_client,
+                mcp_url=MCP_SERVER_URL,
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception:
+            logger.error("Unexpected exception in /chat/stream", exc_info=True)
+            yield f'data: {json.dumps({"type": "error", "message": "An unexpected error occurred."})}\n\n'
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":

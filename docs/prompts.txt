@@ -45,3 +45,19 @@ Main Function:
 Create a main function that starts the MCP and Agent server and runs the agent with a CLI interface. Allow for the frontend to be implemented later.
 
 Ask me questions to clarify product requirements, technical requirements, engineering principles, and hard constraints.
+
+Frontend:
+
+Create a frontend website for the user to input weather queries. The frontend must:
+- Be designed using Python and Streamlit.
+- Provide a user input field
+- Submit user queries to the LLM agent backend
+- Display structured responses
+- Display loading stages
+- Display user-friendly error messages
+- Not have access to any API keys
+- Be able to be activated from main.py
+
+The frontend does not require advanced styling or authentication
+
+Ask me questions to clarify product requirements, technical requirements, engineering principles, and hard constraints.
