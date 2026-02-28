@@ -162,6 +162,72 @@ If a query is unrelated to weather:
 
 - The agent must respond that it is specialized for weather-related queries.
 
+**4. Condition-Based Advisories**
+
+After a successful weather tool invocation, the agent must evaluate environmental conditions and determine whether one or more advisories should be issued.
+
+Advisory decisions must be derived from the LLM-based contextual reasoning and must not rely on hard-coded numeric thresholds.
+
+The agent must support the following advisory categories:
+
+**Heat Risk Advisory**
+
+Must consider:
+
+- Temperature
+- Feels Like
+- Humidity
+
+If elevated head conditions are detected, the agent must:
+
+- Classify severity level.
+- Provide a concise explanation.
+- Provide recommended precautionary action.
+
+**Cold Risk Advisory**
+
+Must consider:
+
+- Feels Like
+- Wind Speed
+
+If hazardous cold conditions are detected, the agent must:
+
+- Classify severity level.
+- Provide a concise explanation.
+- Provide recommended precautionary action.
+
+**Wind Hazard Advisory**
+
+Must consider:
+
+- Wind Speed
+- Weather Description
+
+If hazardous wind conditions are detected, the agent must:
+
+- Classify severity level.
+- Provide a concise explanation.
+- Provide recommended precautionary action.
+
+**Driving Conditions Advisory**
+
+Must consider:
+
+- Visibility
+- Wind Speed
+- Weather Description
+
+If unsafe driving conditions are detected, the agent must:
+
+- Classify driving conditions.
+- Provide a concise explanation.
+- Provide recommended precautionary action.
+
+Multiple advisories may be issued simultaneously if multiple risk conditions are identified.
+
+Advisory evaluation must be performed using the same structured weather response returned by the MCP server.
+
 #### Error Handling
 
 The agent must handle:
