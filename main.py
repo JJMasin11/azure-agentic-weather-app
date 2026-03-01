@@ -62,58 +62,6 @@ def _shutdown(procs: list, log_files: list) -> None:
     for f in log_files:
         f.close()
 
-
-# ── REPL (kept for CLI testing — uncomment and comment out Streamlit launch) ───
-#
-# def _run_repl() -> None:
-#     """Interactive chat loop. Maintains conversation history in memory."""
-#     print(
-#         f"\nWeather Agent — type your question, or 'quit' to exit.\n"
-#         f"Logs: mcp_server.log | agent_server.log\n"
-#     )
-#
-#     history: list[dict] = []
-#
-#     while True:
-#         try:
-#             user_input = input("You: ").strip()
-#         except (EOFError, KeyboardInterrupt):
-#             print()
-#             break
-#
-#         if not user_input:
-#             continue
-#
-#         if user_input.lower() in {"quit", "exit", "q"}:
-#             break
-#
-#         payload = {"message": user_input, "history": history}
-#
-#         try:
-#             response = httpx.post(AGENT_CHAT_URL, json=payload, timeout=30.0)
-#             response.raise_for_status()
-#             data = response.json()
-#         except httpx.HTTPStatusError as exc:
-#             print(f"Error: HTTP {exc.response.status_code} from agent.")
-#             continue
-#         except Exception as exc:
-#             print(f"Error: {exc}")
-#             continue
-#
-#         if "error" in data:
-#             print(f"Error: {data['error']}")
-#             continue
-#
-#         reply = data.get("reply", "")
-#         tool_used = data.get("tool_used", False)
-#         suffix = " [tool used]" if tool_used else ""
-#         print(f"Agent{suffix}: {reply}\n")
-#
-#         # Append to history only on success
-#         history.append({"role": "user", "content": user_input})
-#         history.append({"role": "assistant", "content": reply})
-
-
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -215,11 +163,6 @@ def main() -> None:
                 time.sleep(1)
         except KeyboardInterrupt:
             print()
-
-        # ── Interactive REPL (commented out — kept for CLI testing) ───────────
-        # Uncomment _run_repl() and comment out the Streamlit launch block above
-        # to use the CLI chat loop instead of the browser frontend.
-        # _run_repl()
 
     finally:
         print("Shutting down...")
