@@ -58,7 +58,7 @@ This project uses Azure AI Foundry to access an LLM with tool-calling capability
 1. Sign in to the Azure Portal.
 2. Navigate to Azure AI Foundry.
 3. Create or select an existing AI Project.
-4. Deploy a model that supports function/tool calling (e.g., GPT-4o or equivalent).
+4. Deploy a model that supports function/tool calling (e.g., GPT-4o-mini or equivalent).
 
 **Step 2 - Retrieve Required Values**
 
